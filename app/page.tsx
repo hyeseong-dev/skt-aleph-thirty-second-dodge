@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 
 const ROUND_SECONDS = 60;
-const BASE_SPAWN_INTERVAL_MS = 900;
+const BASE_SPAWN_INTERVAL_MS = 800;
 const PLAYER_SPEED = 300;
 const STORAGE_KEY = 'thirty-second-dodge:v1';
 
