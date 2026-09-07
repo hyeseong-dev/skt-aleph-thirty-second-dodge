@@ -186,9 +186,19 @@ export default function Home() {
       if (statusRef.current === 'idle') playerRef.current = { x: rect.width / 2, y: rect.height - 58 };
     };
     resize();
-    const observer = new ResizeObserver(resize);
+    let resizeFrame: number | null = null;
+    const observer = new ResizeObserver(() => {
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = null;
+        resize();
+      });
+    });
     observer.observe(canvas);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+    };
   }, []);
 
   useEffect(() => {
