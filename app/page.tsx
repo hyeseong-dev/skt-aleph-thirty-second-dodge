@@ -8,9 +8,7 @@ import { Switch } from '@/components/ui/switch';
 
 const ROUND_SECONDS = 60;
 const BASE_SPAWN_INTERVAL_MS = 900;
-const PLAYER_MAX_SPEED = 300;
-const PLAYER_ACCELERATION = 1700;
-const PLAYER_DRAG = 2100;
+const PLAYER_SPEED = 300;
 const STORAGE_KEY = 'thirty-second-dodge:v1';
 
 type GameStatus = 'idle' | 'running' | 'paused' | 'won' | 'lost';
@@ -27,11 +25,6 @@ function isSavedStats(value: unknown): value is SavedStats {
 
 function formatTime(seconds: number) {
   return seconds.toFixed(1).padStart(4, '0');
-}
-
-function moveToward(current: number, target: number, maxDelta: number) {
-  if (Math.abs(target - current) <= maxDelta) return target;
-  return current + Math.sign(target - current) * maxDelta;
 }
 
 function getRoundDifficulty(round: number) {
@@ -53,7 +46,9 @@ export default function Home() {
   const spawnElapsedRef = useRef(0);
   const viewportRef = useRef({ width: 800, height: 450, dpr: 1 });
   const playerRef = useRef({ x: 400, y: 382 });
-  const velocityRef = useRef({ x: 0, y: 0 });
+  const playerElementRef = useRef<HTMLDivElement>(null);
+  const timerValueRef = useRef<HTMLElement>(null);
+  const progressRef = useRef<HTMLSpanElement>(null);
   const pressedKeysRef = useRef(new Set<string>());
   const roundRef = useRef(1);
   const lastUiUpdateRef = useRef(0);
@@ -120,7 +115,6 @@ export default function Home() {
   const resetPositions = useCallback(() => {
     const { width, height } = viewportRef.current;
     playerRef.current = { x: width / 2, y: height - 58 };
-    velocityRef.current = { x: 0, y: 0 };
     pressedKeysRef.current.clear();
     obstaclesRef.current = [];
     particlesRef.current = [];
@@ -129,6 +123,8 @@ export default function Home() {
     lastFrameRef.current = performance.now();
     lastUiUpdateRef.current = 0;
     setTimeLeft(ROUND_SECONDS);
+    if (timerValueRef.current) timerValueRef.current.textContent = formatTime(ROUND_SECONDS);
+    if (progressRef.current) progressRef.current.style.width = '0%';
     setHitFlash(false);
   }, []);
 
@@ -144,7 +140,8 @@ export default function Home() {
 
   const togglePause = useCallback(() => {
     if (statusRef.current === 'running') {
-      pressedKeysRef.current.clear(); velocityRef.current = { x: 0, y: 0 };
+      pressedKeysRef.current.clear();
+      setTimeLeft(Math.max(0, ROUND_SECONDS - elapsedRef.current));
       setPauseReason('manual'); updateStatus('paused');
     } else if (statusRef.current === 'paused') {
       lastFrameRef.current = performance.now(); updateStatus('running');
@@ -155,7 +152,7 @@ export default function Home() {
     if (statusRef.current !== 'running') return;
     const survived = result === 'won' ? ROUND_SECONDS : Math.min(elapsedRef.current, ROUND_SECONDS);
     pressedKeysRef.current.clear();
-    velocityRef.current = { x: 0, y: 0 };
+    setTimeLeft(Math.max(0, ROUND_SECONDS - survived));
     setLastSurvival(survived);
     setBestSurvival((current) => Math.max(current, survived));
     if (result === 'won') {
@@ -255,8 +252,11 @@ export default function Home() {
 
   useEffect(() => {
     const pauseForFocus = () => {
-      pressedKeysRef.current.clear(); velocityRef.current = { x: 0, y: 0 };
-      if (statusRef.current === 'running') { setPauseReason('focus'); updateStatus('paused'); }
+      pressedKeysRef.current.clear();
+      if (statusRef.current === 'running') {
+        setTimeLeft(Math.max(0, ROUND_SECONDS - elapsedRef.current));
+        setPauseReason('focus'); updateStatus('paused');
+      }
     };
     const onVisibility = () => { if (document.hidden) pauseForFocus(); };
     window.addEventListener('blur', pauseForFocus); document.addEventListener('visibilitychange', onVisibility);
@@ -275,18 +275,10 @@ export default function Home() {
         const inputX = Number(pressedKeysRef.current.has('ArrowRight')) - Number(pressedKeysRef.current.has('ArrowLeft'));
         const inputY = Number(pressedKeysRef.current.has('ArrowDown')) - Number(pressedKeysRef.current.has('ArrowUp'));
         const inputLength = Math.hypot(inputX, inputY) || 1;
-        const targetX = (inputX / inputLength) * PLAYER_MAX_SPEED;
-        const targetY = (inputY / inputLength) * PLAYER_MAX_SPEED;
-        const velocity = velocityRef.current;
-        velocity.x = moveToward(velocity.x, targetX, (inputX ? PLAYER_ACCELERATION : PLAYER_DRAG) * dt);
-        velocity.y = moveToward(velocity.y, targetY, (inputY ? PLAYER_ACCELERATION : PLAYER_DRAG) * dt);
         const player = playerRef.current;
         const margin = 18;
-        const nextX = Math.min(width - margin, Math.max(margin, player.x + velocity.x * dt));
-        const nextY = Math.min(height - margin, Math.max(margin, player.y + velocity.y * dt));
-        if (nextX === margin || nextX === width - margin) velocity.x = 0;
-        if (nextY === margin || nextY === height - margin) velocity.y = 0;
-        player.x = nextX; player.y = nextY;
+        player.x = Math.min(width - margin, Math.max(margin, player.x + (inputX / inputLength) * PLAYER_SPEED * dt));
+        player.y = Math.min(height - margin, Math.max(margin, player.y + (inputY / inputLength) * PLAYER_SPEED * dt));
 
         elapsedRef.current += dt; spawnElapsedRef.current += dt * 1000;
         const difficulty = getRoundDifficulty(roundRef.current);
@@ -301,7 +293,9 @@ export default function Home() {
         }
         obstaclesRef.current = obstaclesRef.current.filter((obstacle) => obstacle.y < height + obstacle.radius + 20);
         if (now - lastUiUpdateRef.current >= 50) {
-          setTimeLeft(Math.max(0, ROUND_SECONDS - elapsedRef.current));
+          const remaining = Math.max(0, ROUND_SECONDS - elapsedRef.current);
+          if (timerValueRef.current) timerValueRef.current.textContent = formatTime(remaining);
+          if (progressRef.current) progressRef.current.style.width = `${Math.min((elapsedRef.current / ROUND_SECONDS) * 100, 100)}%`;
           lastUiUpdateRef.current = now;
         }
         if (elapsedRef.current >= ROUND_SECONDS) finishGame('won');
@@ -321,7 +315,7 @@ export default function Home() {
         context.closePath(); context.fill(); context.stroke(); context.restore();
       });
       const player = playerRef.current;
-      context.save(); context.translate(player.x, player.y); context.shadowColor = '#68f5c4'; context.shadowBlur = 22; context.fillStyle = '#68f5c4'; context.beginPath(); context.moveTo(0, -15); context.lineTo(12, 11); context.lineTo(0, 7); context.lineTo(-12, 11); context.closePath(); context.fill(); context.fillStyle = '#eafff8'; context.beginPath(); context.arc(0, 0, 3.2, 0, Math.PI * 2); context.fill(); context.restore();
+      if (playerElementRef.current) playerElementRef.current.style.transform = `translate3d(${player.x - 12}px, ${player.y - 15}px, 0)`;
       particlesRef.current.forEach((particle) => { context.globalAlpha = Math.max(particle.life, 0); context.fillStyle = particle.color; context.fillRect(particle.x, particle.y, 6, 10); }); context.globalAlpha = 1;
       frameRef.current = requestAnimationFrame(draw);
     };
@@ -402,11 +396,12 @@ export default function Home() {
         <div className="game-column">
           <div className="game-hud">
             <div><span className={`status-dot status-${status}`} /><span>{statusCopy.label}</span></div>
-            <div className="timer" aria-live="polite"><Clock3 aria-hidden="true" /><strong>{formatTime(timeLeft)}</strong><span>초</span></div>
+            <div className="timer" aria-live="polite"><Clock3 aria-hidden="true" /><strong ref={timerValueRef}>{formatTime(timeLeft)}</strong><span>초</span></div>
             <div className="difficulty-chip">R{round} · 생성 {getRoundDifficulty(round).spawnInterval}ms · 속도 ×{getRoundDifficulty(round).speedMultiplier.toFixed(2)}</div>
           </div>
           <div className="arena-wrap">
             <canvas ref={canvasRef} className="arena" aria-label="방향키로 플레이어를 움직여 장애물을 피하는 게임 화면" />
+            <div ref={playerElementRef} className="player-ship" aria-hidden="true"><span /></div>
             {status !== 'running' && <div className="game-overlay">
               <span className="overlay-kicker">{statusCopy.label}</span><h2>{statusCopy.title}</h2><p>{statusCopy.detail}</p>
               {status === 'paused' ? <Button size="lg" onClick={togglePause} className="primary-action"><Play data-icon="inline-start" /> 계속하기</Button> : <Button size="lg" onClick={startGame} className="primary-action">{status === 'idle' ? <Play data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" />}{status === 'idle' ? '게임 시작' : status === 'won' ? '다음 라운드' : '다시 시작'}</Button>}
@@ -419,7 +414,7 @@ export default function Home() {
           </div>
         </div>
         <aside className="side-panel" aria-label="게임 정보">
-          <section className="mission-card"><p className="eyebrow">ROUND {round}</p><h2>1분 동안<br />충돌하지 마세요.</h2><div className="survival-track" aria-hidden="true"><span style={{ width: `${Math.min(((ROUND_SECONDS - timeLeft) / ROUND_SECONDS) * 100, 100)}%` }} /></div><p className="mission-note">위에서 떨어지는 붉은 물체에 닿으면 즉시 실패합니다.</p></section>
+          <section className="mission-card"><p className="eyebrow">ROUND {round}</p><h2>1분 동안<br />충돌하지 마세요.</h2><div className="survival-track" aria-hidden="true"><span ref={progressRef} style={{ width: `${Math.min(((ROUND_SECONDS - timeLeft) / ROUND_SECONDS) * 100, 100)}%` }} /></div><p className="mission-note">위에서 떨어지는 붉은 물체에 닿으면 즉시 실패합니다.</p></section>
           <section className="records-card">
             <div className="card-title-row"><p className="eyebrow">내 기록</p><Trophy aria-hidden="true" /></div>
             <dl><div><dt>최장 생존</dt><dd>{formatTime(bestSurvival)}<small>초</small></dd></div><div><dt>누적 성공</dt><dd>{clears}<small>회</small></dd></div></dl>
