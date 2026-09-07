@@ -11,18 +11,33 @@ const ROUND_SECONDS = 60;
 const DIFFICULTY_INTERVALS = { A: 900, B: 800 } as const;
 const PLAYER_SPEED = 300;
 const STORAGE_KEY = 'thirty-second-dodge:v1';
+const MAX_PLAY_HISTORY = 200;
 
 type GameStatus = 'idle' | 'running' | 'paused' | 'won' | 'lost';
 type DifficultyVariant = keyof typeof DIFFICULTY_INTERVALS;
 type Obstacle = { x: number; y: number; radius: number; speed: number; drift: number; rotation: number; spin: number };
-type SavedStats = { version: 1; bestSurvival: number; clears: number; muted: boolean; reduceMotion: boolean };
+type PlayRecord = { id: string; result: 'won' | 'lost'; survived: number; completedAt: string; round: number; variant: DifficultyVariant; testMode: boolean };
+type LegacySavedStats = { version: 1; bestSurvival: number; clears: number; muted: boolean; reduceMotion: boolean };
+type SavedStats = { version: 2; bestSurvival: number; attempts: number; clears: number; failures: number; playHistory: PlayRecord[]; muted: boolean; reduceMotion: boolean };
 
-const DEFAULT_STATS: SavedStats = { version: 1, bestSurvival: 0, clears: 0, muted: false, reduceMotion: false };
+const DEFAULT_STATS: SavedStats = { version: 2, bestSurvival: 0, attempts: 0, clears: 0, failures: 0, playHistory: [], muted: false, reduceMotion: false };
 
 function isSavedStats(value: unknown): value is SavedStats {
   if (!value || typeof value !== 'object') return false;
   const item = value as Partial<SavedStats>;
+  return item.version === 2 && typeof item.bestSurvival === 'number' && Number.isFinite(item.bestSurvival) && item.bestSurvival >= 0 && item.bestSurvival <= ROUND_SECONDS && typeof item.attempts === 'number' && Number.isInteger(item.attempts) && item.attempts >= 0 && typeof item.clears === 'number' && Number.isInteger(item.clears) && item.clears >= 0 && typeof item.failures === 'number' && Number.isInteger(item.failures) && item.failures >= 0 && item.attempts === item.clears + item.failures && Array.isArray(item.playHistory) && item.playHistory.length <= MAX_PLAY_HISTORY && item.playHistory.every(isPlayRecord) && typeof item.muted === 'boolean' && typeof item.reduceMotion === 'boolean';
+}
+
+function isLegacySavedStats(value: unknown): value is LegacySavedStats {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as Partial<LegacySavedStats>;
   return item.version === 1 && typeof item.bestSurvival === 'number' && Number.isFinite(item.bestSurvival) && item.bestSurvival >= 0 && item.bestSurvival <= ROUND_SECONDS && typeof item.clears === 'number' && Number.isInteger(item.clears) && item.clears >= 0 && typeof item.muted === 'boolean' && typeof item.reduceMotion === 'boolean';
+}
+
+function isPlayRecord(value: unknown): value is PlayRecord {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as Partial<PlayRecord>;
+  return typeof item.id === 'string' && (item.result === 'won' || item.result === 'lost') && typeof item.survived === 'number' && Number.isFinite(item.survived) && item.survived >= 0 && item.survived <= ROUND_SECONDS && typeof item.completedAt === 'string' && Number.isInteger(item.round) && Number(item.round) >= 1 && (item.variant === 'A' || item.variant === 'B') && typeof item.testMode === 'boolean';
 }
 
 function formatTime(seconds: number) {
@@ -70,7 +85,10 @@ export default function Home() {
   const [timeLeft, setTimeLeft] = useState(ROUND_SECONDS);
   const [bestSurvival, setBestSurvival] = useState(0);
   const [lastSurvival, setLastSurvival] = useState(0);
+  const [attempts, setAttempts] = useState(0);
   const [clears, setClears] = useState(0);
+  const [failures, setFailures] = useState(0);
+  const [playHistory, setPlayHistory] = useState<PlayRecord[]>([]);
   const [muted, setMuted] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -173,6 +191,16 @@ export default function Home() {
     setTimeLeft(Math.max(0, ROUND_SECONDS - survived));
     setLastSurvival(survived);
     setBestSurvival((current) => Math.max(current, survived));
+    setAttempts((current) => current + 1);
+    setPlayHistory((current) => [...current, {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      result,
+      survived,
+      completedAt: new Date().toISOString(),
+      round: roundRef.current,
+      variant: difficultyVariantRef.current,
+      testMode: testModeRef.current,
+    }].slice(-MAX_PLAY_HISTORY));
     if (result === 'won') {
       setClears((current) => current + 1);
       if (!reduceMotionRef.current) {
@@ -182,6 +210,7 @@ export default function Home() {
       }
       playSuccess();
     } else {
+      setFailures((current) => current + 1);
       setHitFlash(true);
       window.setTimeout(() => setHitFlash(false), reduceMotionRef.current ? 120 : 440);
       playFailure();
@@ -207,14 +236,15 @@ export default function Home() {
       const raw = window.localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed: unknown = JSON.parse(raw);
-        if (!isSavedStats(parsed)) throw new Error('Invalid saved game data');
-        saved = parsed;
+        if (isSavedStats(parsed)) saved = parsed;
+        else if (isLegacySavedStats(parsed)) saved = { ...parsed, version: 2, attempts: parsed.clears, failures: 0, playHistory: [] };
+        else throw new Error('Invalid saved game data');
       }
     } catch {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_STATS));
     }
     const timer = window.setTimeout(() => {
-      setBestSurvival(saved.bestSurvival); setClears(saved.clears); setMuted(saved.muted); setReduceMotion(saved.reduceMotion);
+      setBestSurvival(saved.bestSurvival); setAttempts(saved.attempts); setClears(saved.clears); setFailures(saved.failures); setPlayHistory(saved.playHistory); setMuted(saved.muted); setReduceMotion(saved.reduceMotion);
       mutedRef.current = saved.muted; reduceMotionRef.current = saved.reduceMotion;
       setHydrated(true);
     }, 0);
@@ -223,13 +253,13 @@ export default function Home() {
 
   useEffect(() => {
     if (!hydrated) return;
-    const next: SavedStats = { version: 1, bestSurvival, clears, muted, reduceMotion };
+    const next: SavedStats = { version: 2, bestSurvival, attempts, clears, failures, playHistory, muted, reduceMotion };
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     } catch {
       // The game remains playable when browser storage is unavailable.
     }
-  }, [bestSurvival, clears, hydrated, muted, reduceMotion]);
+  }, [attempts, bestSurvival, clears, failures, hydrated, muted, playHistory, reduceMotion]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -355,7 +385,7 @@ export default function Home() {
 
   const handleMute = (checked: boolean) => { mutedRef.current = checked; setMuted(checked); if (masterGainRef.current) masterGainRef.current.gain.value = checked ? 0 : 0.2; };
   const handleReduceMotion = (checked: boolean) => { reduceMotionRef.current = checked; setReduceMotion(checked); if (checked) particlesRef.current = []; };
-  const resetRecords = () => { setBestSurvival(0); setClears(0); };
+  const resetRecords = () => { setBestSurvival(0); setAttempts(0); setClears(0); setFailures(0); setPlayHistory([]); };
 
   useEffect(() => {
     type ModelContext = {
@@ -413,6 +443,10 @@ export default function Home() {
     lost: { label: '실패', title: '물체와 충돌했어요', detail: `${formatTime(lastSurvival)}초를 버텼습니다. 다시 도전해보세요.` },
   }[status];
   const currentDifficulty = getRoundDifficulty(round, DIFFICULTY_INTERVALS[difficultyVariant]);
+  const testCounts = playHistory.reduce((counts, record) => {
+    if (record.testMode) counts[record.variant] += 1;
+    return counts;
+  }, { A: 0, B: 0 } as Record<DifficultyVariant, number>);
 
   return (
     <main className={`game-shell ${hitFlash ? 'is-hit' : ''} ${reduceMotion ? 'reduce-motion' : ''}`}>
@@ -445,11 +479,11 @@ export default function Home() {
           </div>
         </div>
         <aside className="side-panel" aria-label="게임 정보">
-          <section className="mission-card"><p className="eyebrow">{testMode ? '난이도 비교 테스트' : `ROUND ${round}`}</p><h2>1분 동안<br />충돌하지 마세요.</h2><div className="survival-track" aria-hidden="true"><span ref={progressRef} style={{ width: `${Math.min(((ROUND_SECONDS - timeLeft) / ROUND_SECONDS) * 100, 100)}%` }} /></div><p className="mission-note">위에서 떨어지는 붉은 물체에 닿으면 즉시 실패합니다.</p>{testMode && <div className="test-settings"><div><strong>테스트 설정</strong><span>각 설정을 10판씩 플레이</span></div><RadioGroup aria-label="난이도 테스트 설정" value={difficultyVariant} onValueChange={selectDifficulty} className="test-options" disabled={status === 'running' || status === 'paused'}><label htmlFor="difficulty-a"><RadioGroupItem id="difficulty-a" value="A" />A · 900ms</label><label htmlFor="difficulty-b"><RadioGroupItem id="difficulty-b" value="B" />B · 800ms</label></RadioGroup><small>플레이 중에는 설정이 고정됩니다.</small></div>}</section>
+          <section className="mission-card"><p className="eyebrow">{testMode ? '난이도 비교 테스트' : `ROUND ${round}`}</p><h2>1분 동안<br />충돌하지 마세요.</h2><div className="survival-track" aria-hidden="true"><span ref={progressRef} style={{ width: `${Math.min(((ROUND_SECONDS - timeLeft) / ROUND_SECONDS) * 100, 100)}%` }} /></div><p className="mission-note">위에서 떨어지는 붉은 물체에 닿으면 즉시 실패합니다.</p>{testMode && <div className="test-settings"><div><strong>테스트 설정</strong><span>각 설정을 10판씩 플레이</span></div><RadioGroup aria-label="난이도 테스트 설정" value={difficultyVariant} onValueChange={selectDifficulty} className="test-options" disabled={status === 'running' || status === 'paused'}><label htmlFor="difficulty-a"><RadioGroupItem id="difficulty-a" value="A" />A · 900ms <small>{testCounts.A}판</small></label><label htmlFor="difficulty-b"><RadioGroupItem id="difficulty-b" value="B" />B · 800ms <small>{testCounts.B}판</small></label></RadioGroup><small>성공과 실패 모두 한 판으로 자동 기록됩니다.</small></div>}</section>
           <section className="records-card">
             <div className="card-title-row"><p className="eyebrow">내 기록</p><Trophy aria-hidden="true" /></div>
-            <dl><div><dt>최장 생존</dt><dd>{formatTime(bestSurvival)}<small>초</small></dd></div><div><dt>누적 성공</dt><dd>{clears}<small>회</small></dd></div></dl>
-            <AlertDialog><AlertDialogTrigger render={<Button variant="ghost" size="sm" className="reset-records" />}>기록 초기화</AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>저장된 기록을 초기화할까요?</AlertDialogTitle><AlertDialogDescription>최장 생존 시간과 누적 성공 횟수가 0으로 돌아갑니다. 설정은 유지됩니다.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>취소</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={resetRecords}>초기화</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+            <dl><div><dt>전체 플레이</dt><dd>{attempts}<small>회</small></dd></div><div><dt>최장 생존</dt><dd>{formatTime(bestSurvival)}<small>초</small></dd></div><div><dt>성공</dt><dd>{clears}<small>회</small></dd></div><div><dt>실패</dt><dd>{failures}<small>회</small></dd></div></dl>
+            <AlertDialog><AlertDialogTrigger render={<Button variant="ghost" size="sm" className="reset-records" />}>기록 초기화</AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>저장된 기록을 초기화할까요?</AlertDialogTitle><AlertDialogDescription>전체 플레이 기록과 성공·실패 횟수가 삭제됩니다. 환경 설정은 유지됩니다.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>취소</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={resetRecords}>초기화</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
           </section>
           <section className="rule-card"><p className="eyebrow">게임 규칙</p><ol><li><span>01</span> 게임 시작을 누릅니다.</li><li><span>02</span> 방향키를 누르고 물체를 피합니다.</li><li><span>03</span> 1분 생존하면 다음 라운드로 갑니다.</li></ol></section>
         </aside>

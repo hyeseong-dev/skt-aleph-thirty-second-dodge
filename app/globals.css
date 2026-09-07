@@ -78,6 +78,7 @@ button, input { font: inherit; }
 .test-settings > div span, .test-settings small { color: #718a94; font-size: .65rem; }
 .test-options { grid-template-columns: 1fr 1fr; gap: .45rem; margin: .7rem 0 .55rem; }
 .test-options label { display: flex; min-height: 36px; align-items: center; gap: .45rem; padding: .45rem .55rem; border: 1px solid rgba(117,161,169,.2); border-radius: 8px; background: rgba(5,17,27,.5); color: #b6cbd0; cursor: pointer; font: 600 .72rem Consolas, monospace; }
+.test-options label small { margin-left: auto; color: #68f5c4; font-size: .64rem; }
 .test-options label:has([data-checked]) { border-color: rgba(104,245,196,.55); background: rgba(104,245,196,.08); color: #eafff8; }
 .test-options:has([disabled]) label { cursor: not-allowed; opacity: .6; }
 .records-card { padding: 1rem 1.1rem .8rem; } .card-title-row { display: flex; align-items: center; justify-content: space-between; } .card-title-row svg { width: 17px; color: #ffd166; }
