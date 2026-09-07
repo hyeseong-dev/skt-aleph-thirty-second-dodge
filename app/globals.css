@@ -72,6 +72,14 @@ button, input { font: inherit; }
 .mission-card h2 { position: relative; margin: 0; color: #e9fff7; font-size: 1.24rem; line-height: 1.35; letter-spacing: -.04em; }
 .survival-track { height: 5px; margin: 1rem 0; overflow: hidden; border-radius: 99px; background: #132c3a; } .survival-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#36cda2,#9af7d8); box-shadow: 0 0 12px #68f5c4; transition: width .15s linear; }
 .mission-note { margin: 0; color: #829aa4; font-size: .78rem; line-height: 1.55; }
+.test-settings { position: relative; z-index: 1; margin-top: 1rem; padding-top: .9rem; border-top: 1px solid rgba(108,203,184,.16); }
+.test-settings > div { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
+.test-settings strong { color: #dffaf1; font-size: .78rem; }
+.test-settings > div span, .test-settings small { color: #718a94; font-size: .65rem; }
+.test-options { grid-template-columns: 1fr 1fr; gap: .45rem; margin: .7rem 0 .55rem; }
+.test-options label { display: flex; min-height: 36px; align-items: center; gap: .45rem; padding: .45rem .55rem; border: 1px solid rgba(117,161,169,.2); border-radius: 8px; background: rgba(5,17,27,.5); color: #b6cbd0; cursor: pointer; font: 600 .72rem Consolas, monospace; }
+.test-options label:has([data-checked]) { border-color: rgba(104,245,196,.55); background: rgba(104,245,196,.08); color: #eafff8; }
+.test-options:has([disabled]) label { cursor: not-allowed; opacity: .6; }
 .records-card { padding: 1rem 1.1rem .8rem; } .card-title-row { display: flex; align-items: center; justify-content: space-between; } .card-title-row svg { width: 17px; color: #ffd166; }
 .records-card dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; } .records-card dl > div { padding: .75rem; border: 1px solid rgba(117,161,169,.14); border-radius: 10px; background: rgba(5,17,27,.55); }
 .records-card dt { color: #75909b; font-size: .7rem; } .records-card dd { margin: .3rem 0 0; color: #f0fffa; font: 600 1.12rem Consolas, monospace; } .records-card small { margin-left: .2rem; color: #708a95; font-size: .65rem; }

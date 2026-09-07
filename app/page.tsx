@@ -4,14 +4,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Clock3, Pause, Play, RotateCcw, ShieldCheck, Sparkles, Trophy, Volume2, VolumeX } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Switch } from '@/components/ui/switch';
 
 const ROUND_SECONDS = 60;
-const BASE_SPAWN_INTERVAL_MS = 800;
+const DIFFICULTY_INTERVALS = { A: 900, B: 800 } as const;
 const PLAYER_SPEED = 300;
 const STORAGE_KEY = 'thirty-second-dodge:v1';
 
 type GameStatus = 'idle' | 'running' | 'paused' | 'won' | 'lost';
+type DifficultyVariant = keyof typeof DIFFICULTY_INTERVALS;
 type Obstacle = { x: number; y: number; radius: number; speed: number; drift: number; rotation: number; spin: number };
 type SavedStats = { version: 1; bestSurvival: number; clears: number; muted: boolean; reduceMotion: boolean };
 
@@ -27,10 +29,10 @@ function formatTime(seconds: number) {
   return seconds.toFixed(1).padStart(4, '0');
 }
 
-function getRoundDifficulty(round: number) {
+function getRoundDifficulty(round: number, baseSpawnInterval: number) {
   const level = Math.max(round - 1, 0);
   return {
-    spawnInterval: Math.max(360, BASE_SPAWN_INTERVAL_MS - level * 70),
+    spawnInterval: Math.max(360, baseSpawnInterval - level * 70),
     speedMultiplier: 1 + level * 0.12,
     sizeMultiplier: 1 + Math.min(level, 6) * 0.04,
     driftMultiplier: 1 + level * 0.1,
@@ -51,6 +53,8 @@ export default function Home() {
   const progressRef = useRef<HTMLSpanElement>(null);
   const pressedKeysRef = useRef(new Set<string>());
   const roundRef = useRef(1);
+  const difficultyVariantRef = useRef<DifficultyVariant>('B');
+  const testModeRef = useRef(false);
   const lastUiUpdateRef = useRef(0);
   const obstaclesRef = useRef<Obstacle[]>([]);
   const particlesRef = useRef<Array<{ x: number; y: number; vx: number; vy: number; life: number; color: string }>>([]);
@@ -61,6 +65,8 @@ export default function Home() {
 
   const [status, setStatus] = useState<GameStatus>('idle');
   const [round, setRound] = useState(1);
+  const [difficultyVariant, setDifficultyVariant] = useState<DifficultyVariant>('B');
+  const [testMode, setTestMode] = useState(false);
   const [timeLeft, setTimeLeft] = useState(ROUND_SECONDS);
   const [bestSurvival, setBestSurvival] = useState(0);
   const [lastSurvival, setLastSurvival] = useState(0);
@@ -130,13 +136,25 @@ export default function Home() {
 
   const startGame = useCallback(() => {
     ensureAudio();
-    if (statusRef.current === 'won') {
+    if (statusRef.current === 'won' && !testModeRef.current) {
       roundRef.current += 1;
       setRound(roundRef.current);
     }
     resetPositions();
     updateStatus('running');
   }, [ensureAudio, resetPositions, updateStatus]);
+
+  const selectDifficulty = useCallback((value: string) => {
+    if ((statusRef.current === 'running' || statusRef.current === 'paused') || (value !== 'A' && value !== 'B')) return;
+    const variant = value as DifficultyVariant;
+    difficultyVariantRef.current = variant;
+    setDifficultyVariant(variant);
+    roundRef.current = 1;
+    setRound(1);
+    resetPositions();
+    updateStatus('idle');
+    window.history.replaceState({}, '', `?test=${variant}`);
+  }, [resetPositions, updateStatus]);
 
   const togglePause = useCallback(() => {
     if (statusRef.current === 'running') {
@@ -170,6 +188,18 @@ export default function Home() {
     }
     updateStatus(result);
   }, [playFailure, playSuccess, updateStatus]);
+
+  useEffect(() => {
+    const variant = new URLSearchParams(window.location.search).get('test');
+    if (variant !== 'A' && variant !== 'B') return;
+    difficultyVariantRef.current = variant;
+    testModeRef.current = true;
+    const timer = window.setTimeout(() => {
+      setDifficultyVariant(variant);
+      setTestMode(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     let saved = DEFAULT_STATS;
@@ -281,7 +311,7 @@ export default function Home() {
         player.y = Math.min(height - margin, Math.max(margin, player.y + (inputY / inputLength) * PLAYER_SPEED * dt));
 
         elapsedRef.current += dt; spawnElapsedRef.current += dt * 1000;
-        const difficulty = getRoundDifficulty(roundRef.current);
+        const difficulty = getRoundDifficulty(roundRef.current, DIFFICULTY_INTERVALS[difficultyVariantRef.current]);
         if (spawnElapsedRef.current >= difficulty.spawnInterval) {
           spawnElapsedRef.current -= difficulty.spawnInterval;
           const radius = (13 + Math.random() * 13) * difficulty.sizeMultiplier;
@@ -379,9 +409,10 @@ export default function Home() {
     idle: { label: '준비', title: '1분을 버틸 준비가 됐나요?', detail: '방향키를 누르고 움직여 떨어지는 물체를 피하세요.' },
     running: { label: `라운드 ${round}`, title: '시야를 넓게 보세요', detail: '방향키를 누르는 동안 부드럽게 이동합니다.' },
     paused: { label: '일시정지', title: pauseReason === 'focus' ? '창을 벗어나 게임을 멈췄어요' : '잠시 멈췄어요', detail: '준비되면 이어서 플레이하세요.' },
-    won: { label: '성공', title: `라운드 ${round} 생존 성공!`, detail: '다음 라운드는 장애물이 더 빠르고 자주 등장합니다.' },
+    won: { label: '성공', title: `라운드 ${round} 생존 성공!`, detail: testMode ? '같은 조건으로 다음 테스트 판을 진행합니다.' : '다음 라운드는 장애물이 더 빠르고 자주 등장합니다.' },
     lost: { label: '실패', title: '물체와 충돌했어요', detail: `${formatTime(lastSurvival)}초를 버텼습니다. 다시 도전해보세요.` },
   }[status];
+  const currentDifficulty = getRoundDifficulty(round, DIFFICULTY_INTERVALS[difficultyVariant]);
 
   return (
     <main className={`game-shell ${hitFlash ? 'is-hit' : ''} ${reduceMotion ? 'reduce-motion' : ''}`}>
@@ -397,14 +428,14 @@ export default function Home() {
           <div className="game-hud">
             <div><span className={`status-dot status-${status}`} /><span>{statusCopy.label}</span></div>
             <div className="timer" aria-live="polite"><Clock3 aria-hidden="true" /><strong ref={timerValueRef}>{formatTime(timeLeft)}</strong><span>초</span></div>
-            <div className="difficulty-chip">R{round} · 생성 {getRoundDifficulty(round).spawnInterval}ms · 속도 ×{getRoundDifficulty(round).speedMultiplier.toFixed(2)}</div>
+            <div className="difficulty-chip">{testMode ? `${difficultyVariant} 설정 · ` : `R${round} · `}생성 {currentDifficulty.spawnInterval}ms · 속도 ×{currentDifficulty.speedMultiplier.toFixed(2)}</div>
           </div>
           <div className="arena-wrap">
             <canvas ref={canvasRef} className="arena" aria-label="방향키로 플레이어를 움직여 장애물을 피하는 게임 화면" />
             <div ref={playerElementRef} className="player-ship" aria-hidden="true"><span /></div>
             {status !== 'running' && <div className="game-overlay">
               <span className="overlay-kicker">{statusCopy.label}</span><h2>{statusCopy.title}</h2><p>{statusCopy.detail}</p>
-              {status === 'paused' ? <Button size="lg" onClick={togglePause} className="primary-action"><Play data-icon="inline-start" /> 계속하기</Button> : <Button size="lg" onClick={startGame} className="primary-action">{status === 'idle' ? <Play data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" />}{status === 'idle' ? '게임 시작' : status === 'won' ? '다음 라운드' : '다시 시작'}</Button>}
+              {status === 'paused' ? <Button size="lg" onClick={togglePause} className="primary-action"><Play data-icon="inline-start" /> 계속하기</Button> : <Button size="lg" onClick={startGame} className="primary-action">{status === 'idle' ? <Play data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" />}{status === 'idle' ? '게임 시작' : status === 'won' ? (testMode ? '다음 테스트' : '다음 라운드') : '다시 시작'}</Button>}
             </div>}
           </div>
           <div className="control-strip">
@@ -414,7 +445,7 @@ export default function Home() {
           </div>
         </div>
         <aside className="side-panel" aria-label="게임 정보">
-          <section className="mission-card"><p className="eyebrow">ROUND {round}</p><h2>1분 동안<br />충돌하지 마세요.</h2><div className="survival-track" aria-hidden="true"><span ref={progressRef} style={{ width: `${Math.min(((ROUND_SECONDS - timeLeft) / ROUND_SECONDS) * 100, 100)}%` }} /></div><p className="mission-note">위에서 떨어지는 붉은 물체에 닿으면 즉시 실패합니다.</p></section>
+          <section className="mission-card"><p className="eyebrow">{testMode ? '난이도 비교 테스트' : `ROUND ${round}`}</p><h2>1분 동안<br />충돌하지 마세요.</h2><div className="survival-track" aria-hidden="true"><span ref={progressRef} style={{ width: `${Math.min(((ROUND_SECONDS - timeLeft) / ROUND_SECONDS) * 100, 100)}%` }} /></div><p className="mission-note">위에서 떨어지는 붉은 물체에 닿으면 즉시 실패합니다.</p>{testMode && <div className="test-settings"><div><strong>테스트 설정</strong><span>각 설정을 10판씩 플레이</span></div><RadioGroup aria-label="난이도 테스트 설정" value={difficultyVariant} onValueChange={selectDifficulty} className="test-options" disabled={status === 'running' || status === 'paused'}><label htmlFor="difficulty-a"><RadioGroupItem id="difficulty-a" value="A" />A · 900ms</label><label htmlFor="difficulty-b"><RadioGroupItem id="difficulty-b" value="B" />B · 800ms</label></RadioGroup><small>플레이 중에는 설정이 고정됩니다.</small></div>}</section>
           <section className="records-card">
             <div className="card-title-row"><p className="eyebrow">내 기록</p><Trophy aria-hidden="true" /></div>
             <dl><div><dt>최장 생존</dt><dd>{formatTime(bestSurvival)}<small>초</small></dd></div><div><dt>누적 성공</dt><dd>{clears}<small>회</small></dd></div></dl>
