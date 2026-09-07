@@ -81,6 +81,10 @@ button, input { font: inherit; }
 .test-options label small { margin-left: auto; color: #68f5c4; font-size: .64rem; }
 .test-options label:has([data-checked]) { border-color: rgba(104,245,196,.55); background: rgba(104,245,196,.08); color: #eafff8; }
 .test-options:has([disabled]) label { cursor: not-allowed; opacity: .6; }
+.test-summary { display: grid; gap: .35rem; margin: 0 0 .55rem; }
+.test-summary p { display: grid; grid-template-columns: 1.2rem 1fr; gap: .12rem .35rem; margin: 0; padding: .45rem .5rem; border-radius: 7px; background: rgba(5,17,27,.42); color: #849da6; font: .63rem/1.25 Consolas, monospace; }
+.test-summary p strong { grid-row: 1 / 3; align-self: center; color: #68f5c4; font-size: .74rem; }
+.test-summary p span:last-child { grid-column: 2; }
 .records-card { padding: 1rem 1.1rem .8rem; } .card-title-row { display: flex; align-items: center; justify-content: space-between; } .card-title-row svg { width: 17px; color: #ffd166; }
 .records-card dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; } .records-card dl > div { padding: .75rem; border: 1px solid rgba(117,161,169,.14); border-radius: 10px; background: rgba(5,17,27,.55); }
 .records-card dt { color: #75909b; font-size: .7rem; } .records-card dd { margin: .3rem 0 0; color: #f0fffa; font: 600 1.12rem Consolas, monospace; } .records-card small { margin-left: .2rem; color: #708a95; font-size: .65rem; }

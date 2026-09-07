@@ -44,6 +44,21 @@ function formatTime(seconds: number) {
   return seconds.toFixed(1).padStart(4, '0');
 }
 
+function summarizeTestRecords(records: PlayRecord[], variant: DifficultyVariant) {
+  const matching = records.filter((record) => record.testMode && record.variant === variant);
+  const times = matching.map((record) => record.survived).sort((a, b) => a - b);
+  const midpoint = Math.floor(times.length / 2);
+  const median = times.length === 0 ? 0 : times.length % 2 === 1 ? times[midpoint] : (times[midpoint - 1] + times[midpoint]) / 2;
+  return {
+    count: matching.length,
+    wins: matching.filter((record) => record.result === 'won').length,
+    losses: matching.filter((record) => record.result === 'lost').length,
+    min: times[0] ?? 0,
+    max: times.at(-1) ?? 0,
+    median,
+  };
+}
+
 function getRoundDifficulty(round: number, baseSpawnInterval: number) {
   const level = Math.max(round - 1, 0);
   return {
@@ -262,6 +277,22 @@ export default function Home() {
   }, [attempts, bestSurvival, clears, failures, hydrated, muted, playHistory, reduceMotion]);
 
   useEffect(() => {
+    const syncRecordsAcrossTabs = (event: StorageEvent) => {
+      if (event.key !== STORAGE_KEY || !event.newValue) return;
+      try {
+        const saved: unknown = JSON.parse(event.newValue);
+        if (!isSavedStats(saved)) return;
+        setBestSurvival(saved.bestSurvival); setAttempts(saved.attempts); setClears(saved.clears); setFailures(saved.failures); setPlayHistory(saved.playHistory); setMuted(saved.muted); setReduceMotion(saved.reduceMotion);
+        mutedRef.current = saved.muted; reduceMotionRef.current = saved.reduceMotion;
+      } catch {
+        // Ignore an incomplete write from another tab and preserve the current state.
+      }
+    };
+    window.addEventListener('storage', syncRecordsAcrossTabs);
+    return () => window.removeEventListener('storage', syncRecordsAcrossTabs);
+  }, []);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const resize = () => {
@@ -443,10 +474,7 @@ export default function Home() {
     lost: { label: '실패', title: '물체와 충돌했어요', detail: `${formatTime(lastSurvival)}초를 버텼습니다. 다시 도전해보세요.` },
   }[status];
   const currentDifficulty = getRoundDifficulty(round, DIFFICULTY_INTERVALS[difficultyVariant]);
-  const testCounts = playHistory.reduce((counts, record) => {
-    if (record.testMode) counts[record.variant] += 1;
-    return counts;
-  }, { A: 0, B: 0 } as Record<DifficultyVariant, number>);
+  const testSummaries = { A: summarizeTestRecords(playHistory, 'A'), B: summarizeTestRecords(playHistory, 'B') };
 
   return (
     <main className={`game-shell ${hitFlash ? 'is-hit' : ''} ${reduceMotion ? 'reduce-motion' : ''}`}>
@@ -479,7 +507,7 @@ export default function Home() {
           </div>
         </div>
         <aside className="side-panel" aria-label="게임 정보">
-          <section className="mission-card"><p className="eyebrow">{testMode ? '난이도 비교 테스트' : `ROUND ${round}`}</p><h2>1분 동안<br />충돌하지 마세요.</h2><div className="survival-track" aria-hidden="true"><span ref={progressRef} style={{ width: `${Math.min(((ROUND_SECONDS - timeLeft) / ROUND_SECONDS) * 100, 100)}%` }} /></div><p className="mission-note">위에서 떨어지는 붉은 물체에 닿으면 즉시 실패합니다.</p>{testMode && <div className="test-settings"><div><strong>테스트 설정</strong><span>각 설정을 10판씩 플레이</span></div><RadioGroup aria-label="난이도 테스트 설정" value={difficultyVariant} onValueChange={selectDifficulty} className="test-options" disabled={status === 'running' || status === 'paused'}><label htmlFor="difficulty-a"><RadioGroupItem id="difficulty-a" value="A" />A · 900ms <small>{testCounts.A}판</small></label><label htmlFor="difficulty-b"><RadioGroupItem id="difficulty-b" value="B" />B · 800ms <small>{testCounts.B}판</small></label></RadioGroup><small>성공과 실패 모두 한 판으로 자동 기록됩니다.</small></div>}</section>
+          <section className="mission-card"><p className="eyebrow">{testMode ? '난이도 비교 테스트' : `ROUND ${round}`}</p><h2>1분 동안<br />충돌하지 마세요.</h2><div className="survival-track" aria-hidden="true"><span ref={progressRef} style={{ width: `${Math.min(((ROUND_SECONDS - timeLeft) / ROUND_SECONDS) * 100, 100)}%` }} /></div><p className="mission-note">위에서 떨어지는 붉은 물체에 닿으면 즉시 실패합니다.</p>{testMode && <div className="test-settings"><div><strong>테스트 설정</strong><span>각 설정을 10판씩 플레이</span></div><RadioGroup aria-label="난이도 테스트 설정" value={difficultyVariant} onValueChange={selectDifficulty} className="test-options" disabled={status === 'running' || status === 'paused'}><label htmlFor="difficulty-a"><RadioGroupItem id="difficulty-a" value="A" />A · 900ms <small>{testSummaries.A.count}판</small></label><label htmlFor="difficulty-b"><RadioGroupItem id="difficulty-b" value="B" />B · 800ms <small>{testSummaries.B.count}판</small></label></RadioGroup><div className="test-summary" aria-label="난이도 테스트 통계">{(['A', 'B'] as const).map((variant) => { const summary = testSummaries[variant]; return <p key={variant}><strong>{variant}</strong><span>{formatTime(summary.min)}–{formatTime(summary.max)}초</span><span>중앙값 {formatTime(summary.median)}초</span><span>성공 {summary.wins} · 실패 {summary.losses}</span></p>; })}</div><small>성공과 실패 모두 한 판으로 자동 기록됩니다.</small></div>}</section>
           <section className="records-card">
             <div className="card-title-row"><p className="eyebrow">내 기록</p><Trophy aria-hidden="true" /></div>
             <dl><div><dt>전체 플레이</dt><dd>{attempts}<small>회</small></dd></div><div><dt>최장 생존</dt><dd>{formatTime(bestSurvival)}<small>초</small></dd></div><div><dt>성공</dt><dd>{clears}<small>회</small></dd></div><div><dt>실패</dt><dd>{failures}<small>회</small></dd></div></dl>
