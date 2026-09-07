@@ -6,9 +6,11 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 
-const ROUND_SECONDS = 30;
-const SPAWN_INTERVAL_MS = 760;
-const PLAYER_STEP = 25;
+const ROUND_SECONDS = 60;
+const BASE_SPAWN_INTERVAL_MS = 900;
+const PLAYER_MAX_SPEED = 300;
+const PLAYER_ACCELERATION = 1700;
+const PLAYER_DRAG = 2100;
 const STORAGE_KEY = 'thirty-second-dodge:v1';
 
 type GameStatus = 'idle' | 'running' | 'paused' | 'won' | 'lost';
@@ -27,6 +29,21 @@ function formatTime(seconds: number) {
   return seconds.toFixed(1).padStart(4, '0');
 }
 
+function moveToward(current: number, target: number, maxDelta: number) {
+  if (Math.abs(target - current) <= maxDelta) return target;
+  return current + Math.sign(target - current) * maxDelta;
+}
+
+function getRoundDifficulty(round: number) {
+  const level = Math.max(round - 1, 0);
+  return {
+    spawnInterval: Math.max(360, BASE_SPAWN_INTERVAL_MS - level * 70),
+    speedMultiplier: 1 + level * 0.12,
+    sizeMultiplier: 1 + Math.min(level, 6) * 0.04,
+    driftMultiplier: 1 + level * 0.1,
+  };
+}
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number | null>(null);
@@ -36,6 +53,10 @@ export default function Home() {
   const spawnElapsedRef = useRef(0);
   const viewportRef = useRef({ width: 800, height: 450, dpr: 1 });
   const playerRef = useRef({ x: 400, y: 382 });
+  const velocityRef = useRef({ x: 0, y: 0 });
+  const pressedKeysRef = useRef(new Set<string>());
+  const roundRef = useRef(1);
+  const lastUiUpdateRef = useRef(0);
   const obstaclesRef = useRef<Obstacle[]>([]);
   const particlesRef = useRef<Array<{ x: number; y: number; vx: number; vy: number; life: number; color: string }>>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -44,6 +65,7 @@ export default function Home() {
   const reduceMotionRef = useRef(false);
 
   const [status, setStatus] = useState<GameStatus>('idle');
+  const [round, setRound] = useState(1);
   const [timeLeft, setTimeLeft] = useState(ROUND_SECONDS);
   const [bestSurvival, setBestSurvival] = useState(0);
   const [lastSurvival, setLastSurvival] = useState(0);
@@ -98,23 +120,31 @@ export default function Home() {
   const resetPositions = useCallback(() => {
     const { width, height } = viewportRef.current;
     playerRef.current = { x: width / 2, y: height - 58 };
+    velocityRef.current = { x: 0, y: 0 };
+    pressedKeysRef.current.clear();
     obstaclesRef.current = [];
     particlesRef.current = [];
     elapsedRef.current = 0;
     spawnElapsedRef.current = 0;
     lastFrameRef.current = performance.now();
+    lastUiUpdateRef.current = 0;
     setTimeLeft(ROUND_SECONDS);
     setHitFlash(false);
   }, []);
 
   const startGame = useCallback(() => {
     ensureAudio();
+    if (statusRef.current === 'won') {
+      roundRef.current += 1;
+      setRound(roundRef.current);
+    }
     resetPositions();
     updateStatus('running');
   }, [ensureAudio, resetPositions, updateStatus]);
 
   const togglePause = useCallback(() => {
     if (statusRef.current === 'running') {
+      pressedKeysRef.current.clear(); velocityRef.current = { x: 0, y: 0 };
       setPauseReason('manual'); updateStatus('paused');
     } else if (statusRef.current === 'paused') {
       lastFrameRef.current = performance.now(); updateStatus('running');
@@ -124,6 +154,8 @@ export default function Home() {
   const finishGame = useCallback((result: 'won' | 'lost') => {
     if (statusRef.current !== 'running') return;
     const survived = result === 'won' ? ROUND_SECONDS : Math.min(elapsedRef.current, ROUND_SECONDS);
+    pressedKeysRef.current.clear();
+    velocityRef.current = { x: 0, y: 0 };
     setLastSurvival(survived);
     setBestSurvival((current) => Math.max(current, survived));
     if (result === 'won') {
@@ -202,25 +234,28 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const movePlayer = (event: KeyboardEvent) => {
-      const directions: Record<string, [number, number]> = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+    const arrowKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+    const onKeyDown = (event: KeyboardEvent) => {
       if (event.code === 'Space' && (statusRef.current === 'running' || statusRef.current === 'paused')) {
         event.preventDefault(); togglePause(); return;
       }
-      const direction = directions[event.key];
-      if (!direction || statusRef.current !== 'running') return;
+      if (!arrowKeys.has(event.key) || statusRef.current !== 'running') return;
       event.preventDefault();
-      const { width, height } = viewportRef.current;
-      const margin = 18;
-      playerRef.current.x = Math.min(width - margin, Math.max(margin, playerRef.current.x + direction[0] * PLAYER_STEP));
-      playerRef.current.y = Math.min(height - margin, Math.max(margin, playerRef.current.y + direction[1] * PLAYER_STEP));
+      pressedKeysRef.current.add(event.key);
     };
-    window.addEventListener('keydown', movePlayer);
-    return () => window.removeEventListener('keydown', movePlayer);
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (!arrowKeys.has(event.key)) return;
+      event.preventDefault();
+      pressedKeysRef.current.delete(event.key);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); };
   }, [togglePause]);
 
   useEffect(() => {
     const pauseForFocus = () => {
+      pressedKeysRef.current.clear(); velocityRef.current = { x: 0, y: 0 };
       if (statusRef.current === 'running') { setPauseReason('focus'); updateStatus('paused'); }
     };
     const onVisibility = () => { if (document.hidden) pauseForFocus(); };
@@ -237,19 +272,38 @@ export default function Home() {
       const dt = Math.min((now - lastFrameRef.current) / 1000, 0.05);
       lastFrameRef.current = now;
       if (statusRef.current === 'running') {
-        elapsedRef.current += dt; spawnElapsedRef.current += dt * 1000;
-        if (spawnElapsedRef.current >= SPAWN_INTERVAL_MS) {
-          spawnElapsedRef.current -= SPAWN_INTERVAL_MS;
-          const radius = 13 + Math.random() * 13;
-          obstaclesRef.current.push({ x: radius + Math.random() * Math.max(width - radius * 2, 1), y: -radius - 8, radius, speed: 135 + Math.random() * 78, drift: (Math.random() - 0.5) * 36, rotation: Math.random() * Math.PI, spin: (Math.random() - 0.5) * 2.2 });
-        }
+        const inputX = Number(pressedKeysRef.current.has('ArrowRight')) - Number(pressedKeysRef.current.has('ArrowLeft'));
+        const inputY = Number(pressedKeysRef.current.has('ArrowDown')) - Number(pressedKeysRef.current.has('ArrowUp'));
+        const inputLength = Math.hypot(inputX, inputY) || 1;
+        const targetX = (inputX / inputLength) * PLAYER_MAX_SPEED;
+        const targetY = (inputY / inputLength) * PLAYER_MAX_SPEED;
+        const velocity = velocityRef.current;
+        velocity.x = moveToward(velocity.x, targetX, (inputX ? PLAYER_ACCELERATION : PLAYER_DRAG) * dt);
+        velocity.y = moveToward(velocity.y, targetY, (inputY ? PLAYER_ACCELERATION : PLAYER_DRAG) * dt);
         const player = playerRef.current;
+        const margin = 18;
+        const nextX = Math.min(width - margin, Math.max(margin, player.x + velocity.x * dt));
+        const nextY = Math.min(height - margin, Math.max(margin, player.y + velocity.y * dt));
+        if (nextX === margin || nextX === width - margin) velocity.x = 0;
+        if (nextY === margin || nextY === height - margin) velocity.y = 0;
+        player.x = nextX; player.y = nextY;
+
+        elapsedRef.current += dt; spawnElapsedRef.current += dt * 1000;
+        const difficulty = getRoundDifficulty(roundRef.current);
+        if (spawnElapsedRef.current >= difficulty.spawnInterval) {
+          spawnElapsedRef.current -= difficulty.spawnInterval;
+          const radius = (13 + Math.random() * 13) * difficulty.sizeMultiplier;
+          obstaclesRef.current.push({ x: radius + Math.random() * Math.max(width - radius * 2, 1), y: -radius - 8, radius, speed: (135 + Math.random() * 78) * difficulty.speedMultiplier, drift: (Math.random() - 0.5) * 36 * difficulty.driftMultiplier, rotation: Math.random() * Math.PI, spin: (Math.random() - 0.5) * 2.2 });
+        }
         for (const obstacle of obstaclesRef.current) {
           obstacle.y += obstacle.speed * dt; obstacle.x += obstacle.drift * dt; obstacle.rotation += obstacle.spin * dt;
           if (Math.hypot(obstacle.x - player.x, obstacle.y - player.y) < obstacle.radius + 11) { finishGame('lost'); break; }
         }
         obstaclesRef.current = obstaclesRef.current.filter((obstacle) => obstacle.y < height + obstacle.radius + 20);
-        setTimeLeft(Math.max(0, ROUND_SECONDS - elapsedRef.current));
+        if (now - lastUiUpdateRef.current >= 50) {
+          setTimeLeft(Math.max(0, ROUND_SECONDS - elapsedRef.current));
+          lastUiUpdateRef.current = now;
+        }
         if (elapsedRef.current >= ROUND_SECONDS) finishGame('won');
       }
       if (particlesRef.current.length) {
@@ -296,7 +350,7 @@ export default function Home() {
     const registration = context.registerTool({
       name: 'configure_game_preferences',
       title: '게임 환경 설정',
-      description: '30초 피하기 게임의 음소거와 움직임 감소 설정을 변경합니다.',
+      description: '1분 피하기 게임의 음소거와 움직임 감소 설정을 변경합니다.',
       inputSchema: {
         type: 'object',
         properties: { muted: { type: 'boolean' }, reduceMotion: { type: 'boolean' } },
@@ -328,17 +382,17 @@ export default function Home() {
   }, []);
 
   const statusCopy = {
-    idle: { label: '준비', title: '30초를 버틸 준비가 됐나요?', detail: '방향키로 이동해 떨어지는 물체를 피하세요.' },
-    running: { label: '진행 중', title: '시야를 넓게 보세요', detail: '한 번의 방향키 입력이 한 번의 이동으로 반영됩니다.' },
+    idle: { label: '준비', title: '1분을 버틸 준비가 됐나요?', detail: '방향키를 누르고 움직여 떨어지는 물체를 피하세요.' },
+    running: { label: `라운드 ${round}`, title: '시야를 넓게 보세요', detail: '방향키를 누르는 동안 부드럽게 이동합니다.' },
     paused: { label: '일시정지', title: pauseReason === 'focus' ? '창을 벗어나 게임을 멈췄어요' : '잠시 멈췄어요', detail: '준비되면 이어서 플레이하세요.' },
-    won: { label: '성공', title: '30초 생존 성공!', detail: '기록을 저장했습니다. 새 판에 도전해보세요.' },
+    won: { label: '성공', title: `라운드 ${round} 생존 성공!`, detail: '다음 라운드는 장애물이 더 빠르고 자주 등장합니다.' },
     lost: { label: '실패', title: '물체와 충돌했어요', detail: `${formatTime(lastSurvival)}초를 버텼습니다. 다시 도전해보세요.` },
   }[status];
 
   return (
     <main className={`game-shell ${hitFlash ? 'is-hit' : ''} ${reduceMotion ? 'reduce-motion' : ''}`}>
       <header className="topbar">
-        <div className="brand" aria-label="30초 피하기"><span className="brand-mark"><ShieldCheck aria-hidden="true" /></span><div><p>THIRTY SECOND</p><h1>DODGE</h1></div></div>
+        <div className="brand" aria-label="1분 피하기"><span className="brand-mark"><ShieldCheck aria-hidden="true" /></span><div><p>ONE MINUTE</p><h1>DODGE</h1></div></div>
         <div className="top-controls" aria-label="환경 설정">
           <div className="switch-control">{muted ? <VolumeX aria-hidden="true" /> : <Volume2 aria-hidden="true" />}<span>음소거</span><Switch checked={muted} onCheckedChange={handleMute} aria-label="음소거" /></div>
           <div className="switch-control"><Sparkles aria-hidden="true" /><span>움직임 감소</span><Switch checked={reduceMotion} onCheckedChange={handleReduceMotion} aria-label="움직임 감소" /></div>
@@ -349,13 +403,13 @@ export default function Home() {
           <div className="game-hud">
             <div><span className={`status-dot status-${status}`} /><span>{statusCopy.label}</span></div>
             <div className="timer" aria-live="polite"><Clock3 aria-hidden="true" /><strong>{formatTime(timeLeft)}</strong><span>초</span></div>
-            <div className="difficulty-chip">생성 간격 {SPAWN_INTERVAL_MS}ms</div>
+            <div className="difficulty-chip">R{round} · 생성 {getRoundDifficulty(round).spawnInterval}ms · 속도 ×{getRoundDifficulty(round).speedMultiplier.toFixed(2)}</div>
           </div>
           <div className="arena-wrap">
             <canvas ref={canvasRef} className="arena" aria-label="방향키로 플레이어를 움직여 장애물을 피하는 게임 화면" />
             {status !== 'running' && <div className="game-overlay">
               <span className="overlay-kicker">{statusCopy.label}</span><h2>{statusCopy.title}</h2><p>{statusCopy.detail}</p>
-              {status === 'paused' ? <Button size="lg" onClick={togglePause} className="primary-action"><Play data-icon="inline-start" /> 계속하기</Button> : <Button size="lg" onClick={startGame} className="primary-action">{status === 'idle' ? <Play data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" />}{status === 'idle' ? '게임 시작' : '다시 시작'}</Button>}
+              {status === 'paused' ? <Button size="lg" onClick={togglePause} className="primary-action"><Play data-icon="inline-start" /> 계속하기</Button> : <Button size="lg" onClick={startGame} className="primary-action">{status === 'idle' ? <Play data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" />}{status === 'idle' ? '게임 시작' : status === 'won' ? '다음 라운드' : '다시 시작'}</Button>}
             </div>}
           </div>
           <div className="control-strip">
@@ -365,13 +419,13 @@ export default function Home() {
           </div>
         </div>
         <aside className="side-panel" aria-label="게임 정보">
-          <section className="mission-card"><p className="eyebrow">MISSION 01</p><h2>30초 동안<br />충돌하지 마세요.</h2><div className="survival-track" aria-hidden="true"><span style={{ width: `${Math.min(((ROUND_SECONDS - timeLeft) / ROUND_SECONDS) * 100, 100)}%` }} /></div><p className="mission-note">위에서 떨어지는 붉은 물체에 닿으면 즉시 실패합니다.</p></section>
+          <section className="mission-card"><p className="eyebrow">ROUND {round}</p><h2>1분 동안<br />충돌하지 마세요.</h2><div className="survival-track" aria-hidden="true"><span style={{ width: `${Math.min(((ROUND_SECONDS - timeLeft) / ROUND_SECONDS) * 100, 100)}%` }} /></div><p className="mission-note">위에서 떨어지는 붉은 물체에 닿으면 즉시 실패합니다.</p></section>
           <section className="records-card">
             <div className="card-title-row"><p className="eyebrow">내 기록</p><Trophy aria-hidden="true" /></div>
             <dl><div><dt>최장 생존</dt><dd>{formatTime(bestSurvival)}<small>초</small></dd></div><div><dt>누적 성공</dt><dd>{clears}<small>회</small></dd></div></dl>
             <AlertDialog><AlertDialogTrigger render={<Button variant="ghost" size="sm" className="reset-records" />}>기록 초기화</AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>저장된 기록을 초기화할까요?</AlertDialogTitle><AlertDialogDescription>최장 생존 시간과 누적 성공 횟수가 0으로 돌아갑니다. 설정은 유지됩니다.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>취소</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={resetRecords}>초기화</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
           </section>
-          <section className="rule-card"><p className="eyebrow">게임 규칙</p><ol><li><span>01</span> 게임 시작을 누릅니다.</li><li><span>02</span> 방향키로 물체를 피합니다.</li><li><span>03</span> 30초 생존하면 성공입니다.</li></ol></section>
+          <section className="rule-card"><p className="eyebrow">게임 규칙</p><ol><li><span>01</span> 게임 시작을 누릅니다.</li><li><span>02</span> 방향키를 누르고 물체를 피합니다.</li><li><span>03</span> 1분 생존하면 다음 라운드로 갑니다.</li></ol></section>
         </aside>
       </section>
     </main>
